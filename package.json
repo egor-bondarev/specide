@@ -1,0 +1,25 @@
+{
+  "name": "specide",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build:packages": "pnpm --filter @specide/schema build && pnpm --filter @specide/markdown build",
+    "dev": "pnpm build:packages && pnpm --filter @specide/api build && concurrently -k -n api,web \"pnpm --filter @specide/api dev\" \"pnpm --filter @specide/web dev\"",
+    "build": "pnpm build:packages && pnpm --filter @specide/api build && pnpm --filter @specide/web build",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "test": "pnpm build:packages && vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules
+.next
+dist
+pnpm-lock.yaml
+.specide
+apps/web/next-env.d.ts
+docs/MVP1_CRITIC_REVIEW.md
+docs/MVP1_EDITOR_GIT_PLAN.md
+docs/PROJECT_CONCEPT.md

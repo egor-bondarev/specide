@@ -1,0 +1,12 @@
+node_modules/
+.next/
+dist/
+coverage/
+.specide/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+apps/web/next-env.d.ts
+/examples/workspace/requirements/business/
+/examples/workspace/tests/test-cases/
