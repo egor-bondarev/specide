@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   FileText,
+  FilePlus2,
   FolderOpen,
   LoaderCircle,
   PanelLeftClose,
@@ -25,10 +26,14 @@ import type {
   RequirementMetadata,
   RequirementStatus,
   SaveDocumentRequest,
-  SaveOperation,
+  DocumentOperation,
   WorkspaceInfo,
 } from '@specide/schema';
 import { api, RequestError } from '../lib/api';
+import {
+  CreateDocumentDialog,
+  CREATE_OPERATION_KEY,
+} from './create-document-dialog';
 
 const MarkdownEditor = dynamic(() => import('./markdown-editor'), {
   ssr: false,
@@ -69,6 +74,7 @@ export function Workspace() {
   const [message, setMessage] = useState('');
   const [sidebar, setSidebar] = useState(true);
   const [editorEpoch, setEditorEpoch] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
   const workspace = useQuery({
     queryKey: ['workspace', 'system'],
     queryFn: () => api<WorkspaceInfo>('/workspace'),
@@ -97,6 +103,7 @@ export function Workspace() {
   useEffect(() => {
     if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
     try {
+      if (sessionStorage.getItem(CREATE_OPERATION_KEY)) setCreateOpen(true);
       const stored = sessionStorage.getItem(pendingKey);
       if (stored) {
         const value = JSON.parse(stored) as PendingSave;
@@ -184,7 +191,7 @@ export function Workspace() {
     if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
   }
 
-  async function applyResult(operation: SaveOperation) {
+  async function applyResult(operation: DocumentOperation) {
     if (operation.status === 'succeeded' && operation.document) {
       remember(null);
       setReloadRequired(false);
@@ -237,7 +244,7 @@ export function Workspace() {
     setMessage('');
     try {
       await applyResult(
-        await api<SaveOperation>('/documents/' + value.id, {
+        await api<DocumentOperation>('/documents/' + value.id, {
           method: 'PUT',
           body: JSON.stringify(value.request),
         }),
@@ -266,9 +273,9 @@ export function Workspace() {
     setBusy(true);
     setError('');
     try {
-      let operation: SaveOperation;
+      let operation: DocumentOperation;
       try {
-        operation = await api<SaveOperation>(
+        operation = await api<DocumentOperation>(
           '/operations/' + value.request.operationId,
         );
       } catch (cause) {
@@ -277,7 +284,7 @@ export function Workspace() {
           cause.code !== 'OPERATION_NOT_FOUND'
         )
           throw cause;
-        operation = await api<SaveOperation>('/documents/' + value.id, {
+        operation = await api<DocumentOperation>('/documents/' + value.id, {
           method: 'PUT',
           body: JSON.stringify(value.request),
         });
@@ -330,6 +337,44 @@ export function Workspace() {
         : current,
     );
     setMessage('');
+  }
+
+  function openCreate() {
+    if (locked) return;
+    if (
+      dirty &&
+      !window.confirm(
+        'Есть несохраненные изменения. При открытии нового требования они будут отменены. Продолжить?',
+      )
+    )
+      return;
+    setCreateOpen(true);
+  }
+
+  function created(value: RequirementDocument) {
+    client.setQueryData<DocumentList>(['documents', 'system'], (previous) => ({
+      documents: [
+        ...(previous?.documents ?? []).filter(
+          (doc) => doc.metadata.id !== value.metadata.id,
+        ),
+        { path: value.path, metadata: value.metadata, version: value.version },
+      ],
+      issues: previous?.issues ?? [],
+    }));
+    client.setQueryData(['document', value.metadata.id], value);
+    setSelected(value.metadata.id);
+    setSaved(value);
+    setDraft({ metadata: value.metadata, body: value.body });
+    setSearch('');
+    setError('');
+    setEditorError('');
+    setReloadRequired(false);
+    setMessage('Требование создано');
+    setCreateOpen(false);
+    setEditorEpoch((epoch) => epoch + 1);
+    if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
+    void client.invalidateQueries({ queryKey: ['documents'] });
+    void client.invalidateQueries({ queryKey: ['workspace'] });
   }
 
   const filtered = documents.filter((doc) =>
@@ -474,6 +519,15 @@ export function Workspace() {
               <span>{selected ?? 'Документ'}</span>
             </div>
             <div className="document-actions">
+              <button
+                className="icon-button"
+                title="Создать требование"
+                aria-label="Создать требование"
+                disabled={locked}
+                onClick={openCreate}
+              >
+                <FilePlus2 size={18} />
+              </button>
               <span className={'save-state ' + (dirty ? 'unsaved' : '')}>
                 {busy ? (
                   <LoaderCircle className="spin" size={14} />
@@ -674,6 +728,12 @@ export function Workspace() {
           </footer>
         </main>
       </div>
+      {createOpen && (
+        <CreateDocumentDialog
+          onClose={() => setCreateOpen(false)}
+          onCreated={created}
+        />
+      )}
     </div>
   );
 }

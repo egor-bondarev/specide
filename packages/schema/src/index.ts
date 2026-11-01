@@ -39,10 +39,19 @@ export const saveDocumentSchema = z.object({
   body: z.string().max(1_000_000),
 });
 
+export const createDocumentSchema = z
+  .object({
+    operationId: z.uuid(),
+    title: z.string().trim().min(1).max(200),
+    owner: z.string().trim().max(160).optional(),
+  })
+  .strict();
+
 export type RequirementKind = z.infer<typeof requirementKindSchema>;
 export type RequirementStatus = z.infer<typeof requirementStatusSchema>;
 export type RequirementMetadata = z.infer<typeof requirementMetadataSchema>;
 export type SaveDocumentRequest = z.infer<typeof saveDocumentSchema>;
+export type CreateDocumentRequest = z.infer<typeof createDocumentSchema>;
 
 export interface RequirementDocument {
   path: string;
@@ -72,7 +81,7 @@ export interface ApiError {
   code: string;
   message: string;
 }
-export interface SaveOperation {
+export interface DocumentOperation {
   id: string;
   status: 'pending' | 'succeeded' | 'failed' | 'needs_review';
   document?: RequirementDocument;

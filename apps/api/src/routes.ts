@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Inject, Param, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Put,
+} from '@nestjs/common';
 import { DocumentsService } from './documents';
 
 @Controller()
@@ -15,6 +23,11 @@ export class DocumentsController {
   @Get('documents')
   list() {
     return this.documents.list();
+  }
+
+  @Post('documents')
+  create(@Body() body: unknown) {
+    return this.documents.create(body);
   }
 
   @Get('documents/:id')

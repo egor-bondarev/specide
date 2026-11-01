@@ -16,7 +16,7 @@ import {
   parseRequirement,
   serializeRequirement,
 } from '@specide/markdown';
-import { DocumentsService } from './documents';
+import { atomicWrite, DocumentsService } from './documents';
 
 const original =
   '---\nid: SR-001\ntype: system\ntitle: First\nstatus: draft\npriority: critical\n---\n\n# Original\n';
@@ -49,6 +49,153 @@ async function request(body: string) {
 }
 
 describe('document persistence', () => {
+  it('creates a system requirement with a stable ID, draft status and a template', async () => {
+    const result = await service.create({
+      operationId: randomUUID(),
+      title: '  New requirement  ',
+      owner: '  Analyst  ',
+    });
+    expect(result.status).toBe('succeeded');
+    expect(result.document?.metadata).toEqual({
+      id: 'SR-002',
+      type: 'system',
+      title: 'New requirement',
+      status: 'draft',
+      owner: 'Analyst',
+    });
+    expect(result.document?.path).toBe('requirements/system/SR-002.md');
+    const document = await service.get('SR-002');
+    expect(document.body).toContain('## Назначение');
+    expect(document.body).toContain('## Критерии приемки');
+    expect((await service.list()).documents).toHaveLength(2);
+  });
+
+  it.each([
+    { title: '   ' },
+    { title: 'Valid', type: 'business' },
+    { title: 'Valid', id: 'SR-001' },
+  ])(
+    'rejects an invalid creation request without creating a document: %j',
+    async (fields) => {
+      await expect(
+        service.create({ operationId: randomUUID(), ...fields }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(
+        (await service.list()).documents.map((doc) => doc.metadata.id),
+      ).toEqual(['SR-001']);
+      expect(await readFile(join(root, 'SR-001.md'), 'utf8')).toBe(original);
+    },
+  );
+
+  it('assigns different IDs to concurrent creation requests', async () => {
+    const results = await Promise.all([
+      service.create({
+        operationId: randomUUID(),
+        title: 'First new requirement',
+      }),
+      service.create({
+        operationId: randomUUID(),
+        title: 'Second new requirement',
+      }),
+    ]);
+    expect(results.map((result) => result.document?.metadata.id)).toEqual([
+      'SR-002',
+      'SR-003',
+    ]);
+    expect((await service.list()).documents).toHaveLength(3);
+  });
+
+  it('does not create a second document when a creation is retried after restart', async () => {
+    const input = { operationId: randomUUID(), title: 'Create once' };
+    const first = await service.create(input);
+    const restarted = new DocumentsService({ root, state });
+    await restarted.onModuleInit();
+    expect(await restarted.create(input)).toEqual(first);
+    expect((await restarted.list()).documents).toHaveLength(2);
+    await expect(
+      restarted.create({ ...input, title: 'Other title' }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('reserves IDs found in invalid filenames and duplicate metadata', async () => {
+    await writeFile(join(root, 'SR-002.md'), 'An invalid requirement');
+    const duplicate = original.replace('SR-001', 'SR-010');
+    await writeFile(join(root, 'custom.md'), duplicate);
+    await writeFile(join(root, 'copy.md'), duplicate);
+    const result = await service.create({
+      operationId: randomUUID(),
+      title: 'Next available',
+    });
+    expect(result.document?.metadata.id).toBe('SR-011');
+    expect(await readFile(join(root, 'SR-002.md'), 'utf8')).toBe(
+      'An invalid requirement',
+    );
+    expect(await readFile(join(root, 'custom.md'), 'utf8')).toBe(duplicate);
+  });
+
+  it('never overwrites an existing file when publishing a new document', async () => {
+    await expect(
+      atomicWrite(join(root, 'SR-001.md'), 'replacement', { createOnly: true }),
+    ).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await readFile(join(root, 'SR-001.md'), 'utf8')).toBe(original);
+  });
+
+  it('refuses a symlinked creation directory before writing outside the workspace', async () => {
+    const outside = join(directory, 'outside');
+    await mkdir(outside);
+    await symlink(outside, join(root, 'requirements'));
+    await expect(
+      service.create({ operationId: randomUUID(), title: 'Escape' }),
+    ).rejects.toMatchObject({ status: 400 });
+    const files = await import('node:fs/promises').then((fs) =>
+      fs.readdir(outside),
+    );
+    expect(files).toEqual([]);
+  });
+
+  it.each([false, true])(
+    'recovers a pending creation after restart (published: %s)',
+    async (published) => {
+      const operationId = randomUUID();
+      const relativePath = 'requirements/system/SR-002.md';
+      const target = serializeRequirement(
+        { id: 'SR-002', type: 'system', title: 'Recovered', status: 'draft' },
+        '## Назначение\n',
+      );
+      await mkdir(join(root, 'requirements/system'), { recursive: true });
+      if (published) await writeFile(join(root, relativePath), target);
+      const workspace = await import('node:fs/promises').then((fs) =>
+        fs.realpath(root),
+      );
+      await writeFile(
+        join(state, operationId + '.json'),
+        JSON.stringify({
+          id: operationId,
+          workspace,
+          fingerprint: 'test',
+          kind: 'create',
+          path: relativePath,
+          beforeVersion: null,
+          afterVersion: contentVersion(target),
+          status: 'pending',
+        }),
+      );
+      const restarted = new DocumentsService({ root, state });
+      await restarted.onModuleInit();
+      const result = await restarted.operation(operationId);
+      expect(result.status).toBe(published ? 'succeeded' : 'failed');
+      if (published) {
+        expect(result.document?.metadata.id).toBe('SR-002');
+      } else {
+        expect(result.error?.code).toBe('CREATE_INTERRUPTED');
+        const next = await restarted.create({
+          operationId: randomUUID(),
+          title: 'After interruption',
+        });
+        expect(next.document?.metadata.id).toBe('SR-003');
+      }
+    },
+  );
   it.each([
     ['business', 'BR-001'],
     ['test_case', 'TC-001'],
