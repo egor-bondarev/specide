@@ -2,46 +2,62 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Inject,
   Param,
   Post,
   Put,
 } from '@nestjs/common';
-import { DocumentsService } from './documents';
+import { WorkspaceManager } from './workspaces';
 
 @Controller()
 export class DocumentsController {
   constructor(
-    @Inject(DocumentsService) private readonly documents: DocumentsService,
+    @Inject(WorkspaceManager) private readonly workspaces: WorkspaceManager,
   ) {}
 
-  @Get('workspace')
-  workspace() {
-    return this.documents.workspace();
-  }
-
   @Get('documents')
-  list() {
-    return this.documents.list();
+  list(@Headers('x-specide-workspace') scope?: string) {
+    return this.workspaces.run(scope, (session) => session.documents.list());
   }
 
   @Post('documents')
-  create(@Body() body: unknown) {
-    return this.documents.create(body);
+  create(
+    @Body() body: unknown,
+    @Headers('x-specide-workspace') scope?: string,
+  ) {
+    return this.workspaces.run(
+      scope,
+      (session) => session.documents.create(body),
+      true,
+    );
   }
 
   @Get('documents/:id')
-  get(@Param('id') id: string) {
-    return this.documents.get(id);
+  get(@Param('id') id: string, @Headers('x-specide-workspace') scope?: string) {
+    return this.workspaces.run(scope, (session) => session.documents.get(id));
   }
 
   @Put('documents/:id')
-  save(@Param('id') id: string, @Body() body: unknown) {
-    return this.documents.save(id, body);
+  save(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('x-specide-workspace') scope?: string,
+  ) {
+    return this.workspaces.run(
+      scope,
+      (session) => session.documents.save(id, body),
+      true,
+    );
   }
 
   @Get('operations/:id')
-  operation(@Param('id') id: string) {
-    return this.documents.operation(id);
+  operation(
+    @Param('id') id: string,
+    @Headers('x-specide-workspace') scope?: string,
+  ) {
+    return this.workspaces.run(scope, (session) =>
+      session.documents.operation(id),
+    );
   }
 }

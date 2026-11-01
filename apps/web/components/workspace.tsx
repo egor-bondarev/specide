@@ -6,10 +6,12 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   Check,
+  ChevronDown,
   ChevronRight,
   Circle,
   FileText,
   FilePlus2,
+  GitBranch,
   FolderOpen,
   LoaderCircle,
   PanelLeftClose,
@@ -21,15 +23,27 @@ import {
 } from 'lucide-react';
 import type {
   DocumentList,
+  GitStatus,
   RequirementDocument,
   RequirementKind,
   RequirementMetadata,
   RequirementStatus,
   SaveDocumentRequest,
   DocumentOperation,
-  WorkspaceInfo,
+  WorkspaceConnection,
 } from '@specide/schema';
-import { api, RequestError } from '../lib/api';
+import {
+  api,
+  RequestError,
+  workspaceStorageKey,
+  WORKSPACE_CHANGED_EVENT,
+  isWorkspaceStale,
+} from '../lib/api';
+import {
+  ConnectRepositoryDialog,
+  CONNECTION_OPERATION_KEY,
+} from './connect-repository-dialog';
+import { GitPanel, GIT_OPERATION_KEY } from './git-panel';
 import {
   CreateDocumentDialog,
   CREATE_OPERATION_KEY,
@@ -55,11 +69,37 @@ const statusLabels: Record<RequirementStatus, string> = {
   deprecated: 'Устарело',
 };
 const kinds: RequirementKind[] = ['system'];
-const pendingKey = 'specide.pending-save';
 type PendingSave = { id: string; request: SaveDocumentRequest };
 type Draft = { metadata: RequirementMetadata; body: string };
 
 export function Workspace() {
+  const initial = useQuery({
+    queryKey: ['workspace', 'bootstrap'],
+    queryFn: () => api<WorkspaceConnection>('/workspace'),
+    retry: false,
+  });
+  if (!initial.data)
+    return (
+      <div className="state">
+        <FolderOpen />
+        <p>{initial.error?.message ?? 'Подключение рабочего пространства…'}</p>
+        {initial.isError && (
+          <button onClick={() => void initial.refetch()}>Повторить</button>
+        )}
+      </div>
+    );
+  return <WorkspaceEditor initialWorkspace={initial.data} />;
+}
+
+function WorkspaceEditor({
+  initialWorkspace,
+}: {
+  initialWorkspace: WorkspaceConnection;
+}) {
+  const pendingKey = workspaceStorageKey('specide.pending-save');
+  const allowNavigation = useRef(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [workspaceChanged, setWorkspaceChanged] = useState(isWorkspaceStale);
   const client = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -75,9 +115,16 @@ export function Workspace() {
   const [sidebar, setSidebar] = useState(true);
   const [editorEpoch, setEditorEpoch] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  const [gitOpen, setGitOpen] = useState(false);
+  const git = useQuery({
+    queryKey: ['git', 'status'],
+    queryFn: () => api<GitStatus>('/git/status'),
+    refetchOnWindowFocus: true,
+  });
   const workspace = useQuery({
     queryKey: ['workspace', 'system'],
-    queryFn: () => api<WorkspaceInfo>('/workspace'),
+    queryFn: () => api<WorkspaceConnection>('/workspace'),
+    initialData: initialWorkspace,
   });
   const listing = useQuery({
     queryKey: ['documents', 'system'],
@@ -95,7 +142,7 @@ export function Workspace() {
     !!saved &&
     (draft.body !== saved.body ||
       JSON.stringify(draft.metadata) !== JSON.stringify(saved.metadata));
-  const locked = busy || pending !== null;
+  const locked = busy || pending !== null || workspaceChanged;
   const documents = (listing.data?.documents ?? []).filter(
     (doc) => doc.metadata.type === 'system',
   );
@@ -103,7 +150,12 @@ export function Workspace() {
   useEffect(() => {
     if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
     try {
-      if (sessionStorage.getItem(CREATE_OPERATION_KEY)) setCreateOpen(true);
+      if (sessionStorage.getItem(workspaceStorageKey(GIT_OPERATION_KEY)))
+        setGitOpen(true);
+      if (sessionStorage.getItem(workspaceStorageKey(CREATE_OPERATION_KEY)))
+        setCreateOpen(true);
+      if (sessionStorage.getItem(CONNECTION_OPERATION_KEY))
+        setConnectOpen(true);
       const stored = sessionStorage.getItem(pendingKey);
       if (stored) {
         const value = JSON.parse(stored) as PendingSave;
@@ -128,6 +180,12 @@ export function Workspace() {
     } catch {
       sessionStorage.removeItem(pendingKey);
     }
+  }, []);
+
+  useEffect(() => {
+    const changed = () => setWorkspaceChanged(true);
+    window.addEventListener(WORKSPACE_CHANGED_EVENT, changed);
+    return () => window.removeEventListener(WORKSPACE_CHANGED_EVENT, changed);
   }, []);
 
   useEffect(() => {
@@ -159,7 +217,8 @@ export function Workspace() {
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (dirty || pending) event.preventDefault();
+      if (!allowNavigation.current && (dirty || pending))
+        event.preventDefault();
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
@@ -200,6 +259,7 @@ export function Workspace() {
       setDraft({ metadata: value.metadata, body: value.body });
       client.setQueryData(['document', value.metadata.id], value);
       await client.invalidateQueries({ queryKey: ['documents'] });
+      await client.invalidateQueries({ queryKey: ['git'] });
       setMessage('Сохранено в файл');
       setError('');
     } else if (
@@ -351,6 +411,18 @@ export function Workspace() {
     setCreateOpen(true);
   }
 
+  function openConnection() {
+    if (locked) return;
+    if (
+      dirty &&
+      !window.confirm(
+        'Есть несохраненные изменения. При подключении другого репозитория они будут отменены. Продолжить?',
+      )
+    )
+      return;
+    setConnectOpen(true);
+  }
+
   function created(value: RequirementDocument) {
     client.setQueryData<DocumentList>(['documents', 'system'], (previous) => ({
       documents: [
@@ -375,6 +447,7 @@ export function Workspace() {
     if (window.matchMedia('(max-width: 600px)').matches) setSidebar(false);
     void client.invalidateQueries({ queryKey: ['documents'] });
     void client.invalidateQueries({ queryKey: ['workspace'] });
+    void client.invalidateQueries({ queryKey: ['git'] });
   }
 
   const filtered = documents.filter((doc) =>
@@ -395,10 +468,17 @@ export function Workspace() {
           </span>
         </a>
         <div className="header-divider" />
-        <span className="workspace-label">
+        <button
+          className="workspace-label workspace-picker"
+          title={workspace.data.path}
+          aria-label="Подключить репозиторий"
+          disabled={locked}
+          onClick={openConnection}
+        >
           <FolderOpen size={15} />{' '}
           {workspace.data?.name ?? 'Рабочее пространство'}
-        </span>
+          <ChevronDown size={14} />
+        </button>
         <span className="local-indicator">
           <span /> Локально
         </span>
@@ -520,6 +600,20 @@ export function Workspace() {
             </div>
             <div className="document-actions">
               <button
+                className="icon-button git-open-button"
+                title="Git"
+                aria-label="Открыть Git"
+                disabled={locked}
+                onClick={() => setGitOpen(true)}
+              >
+                <GitBranch size={18} />
+                {!!git.data?.changes.length && (
+                  <span className="git-change-count">
+                    {git.data.changes.length}
+                  </span>
+                )}
+              </button>
+              <button
                 className="icon-button"
                 title="Создать требование"
                 aria-label="Создать требование"
@@ -575,6 +669,25 @@ export function Workspace() {
               )}
             </div>
           </div>
+          {workspaceChanged && (
+            <div className="error-banner" role="alert">
+              <TriangleAlert size={17} />
+              <span>
+                Репозиторий переключен в другой вкладке. Несохраненный текст
+                остался в редакторе.
+              </span>
+              <button onClick={() => window.location.reload()}>
+                <RefreshCw size={14} />
+                Перезагрузить
+              </button>
+            </div>
+          )}
+          {workspace.data.connectionError && (
+            <div className="error-banner" role="alert">
+              <TriangleAlert size={17} />
+              <span>{workspace.data.connectionError}</span>
+            </div>
+          )}
           {(error || editorError) && (
             <div className="error-banner" role="alert">
               <TriangleAlert size={17} />
@@ -716,6 +829,12 @@ export function Workspace() {
             )}
           <footer className="status-bar">
             <span>
+              {git.data?.available && (
+                <span className="git-footer-branch">
+                  <GitBranch size={11} />
+                  {git.data.branch ?? git.data.head?.slice(0, 8)}
+                </span>
+              )}
               <span className="connection-dot" />
               {workspace.isSuccess
                 ? 'Рабочее пространство подключено'
@@ -732,6 +851,25 @@ export function Workspace() {
         <CreateDocumentDialog
           onClose={() => setCreateOpen(false)}
           onCreated={created}
+        />
+      )}
+      {gitOpen && (
+        <GitPanel
+          onClose={() => setGitOpen(false)}
+          hasUnsavedChanges={dirty}
+          onCommitted={() => {
+            void client.invalidateQueries({ queryKey: ['git'] });
+          }}
+        />
+      )}
+      {connectOpen && (
+        <ConnectRepositoryDialog
+          current={workspace.data}
+          onClose={() => setConnectOpen(false)}
+          onConnected={() => {
+            allowNavigation.current = true;
+            window.location.reload();
+          }}
         />
       )}
     </div>

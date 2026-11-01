@@ -44,6 +44,7 @@ export const WORKSPACE_OPTIONS = Symbol('WORKSPACE_OPTIONS');
 export interface WorkspaceOptions {
   root: string;
   state: string;
+  productRoot?: string;
 }
 const operationRecordSchema = z.object({
   id: z.uuid(),
@@ -115,10 +116,24 @@ export class DocumentsService implements OnModuleInit {
     }
   }
 
-  private exclusive<T>(action: () => Promise<T>): Promise<T> {
+  runExclusive<T>(action: () => Promise<T>): Promise<T> {
     const result = this.tail.then(action);
     this.tail = result.catch(() => undefined);
     return result;
+  }
+
+  async assertCanSwitch() {
+    for (const name of await readdir(this.state)) {
+      if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+      const record = await this.readRecord(name.slice(0, -5));
+      if (record.status === 'pending') {
+        fail(
+          409,
+          'PENDING_OPERATIONS',
+          'Перед переключением нужно проверить незавершенное сохранение документа.',
+        );
+      }
+    }
   }
 
   private async safePath(path: string): Promise<string> {
@@ -292,13 +307,13 @@ export class DocumentsService implements OnModuleInit {
   }
 
   operation(id: string): Promise<DocumentOperation> {
-    return this.exclusive(async () =>
+    return this.runExclusive(async () =>
       this.publicOperation(await this.recover(await this.readRecord(id))),
     );
   }
 
   save(id: string, input: unknown): Promise<DocumentOperation> {
-    return this.exclusive(async () => {
+    return this.runExclusive(async () => {
       const parsed = saveDocumentSchema.safeParse(input);
       if (!parsed.success)
         fail(
@@ -420,7 +435,7 @@ export class DocumentsService implements OnModuleInit {
   }
 
   create(input: unknown): Promise<DocumentOperation> {
-    return this.exclusive(async () => {
+    return this.runExclusive(async () => {
       const parsed = createDocumentSchema.safeParse(input);
       if (!parsed.success)
         fail(

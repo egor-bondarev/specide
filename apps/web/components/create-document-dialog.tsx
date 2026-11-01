@@ -14,7 +14,7 @@ import {
   type DocumentOperation,
   type RequirementDocument,
 } from '@specide/schema';
-import { api, RequestError } from '../lib/api';
+import { api, RequestError, workspaceStorageKey } from '../lib/api';
 
 export const CREATE_OPERATION_KEY = 'specide.pending-create';
 
@@ -24,6 +24,7 @@ interface Props {
 }
 
 export function CreateDocumentDialog({ onClose, onCreated }: Props) {
+  const operationKey = workspaceStorageKey(CREATE_OPERATION_KEY);
   const dialog = useRef<HTMLDialogElement>(null);
   const [title, setTitle] = useState('');
   const [owner, setOwner] = useState('');
@@ -36,7 +37,7 @@ export function CreateDocumentDialog({ onClose, onCreated }: Props) {
 
   useEffect(() => {
     try {
-      const stored = sessionStorage.getItem(CREATE_OPERATION_KEY);
+      const stored = sessionStorage.getItem(operationKey);
       if (stored) {
         const parsed = createDocumentSchema.safeParse(JSON.parse(stored));
         if (parsed.success) {
@@ -45,7 +46,7 @@ export function CreateDocumentDialog({ onClose, onCreated }: Props) {
           setAttempt(parsed.data);
           setMessage('Результат предыдущего создания нужно проверить.');
         } else {
-          sessionStorage.removeItem(CREATE_OPERATION_KEY);
+          sessionStorage.removeItem(operationKey);
         }
       }
     } catch {
@@ -65,7 +66,7 @@ export function CreateDocumentDialog({ onClose, onCreated }: Props) {
   }, [title, owner, attempt]);
 
   function clearAttempt() {
-    sessionStorage.removeItem(CREATE_OPERATION_KEY);
+    sessionStorage.removeItem(operationKey);
     setAttempt(null);
   }
 
@@ -145,7 +146,7 @@ export function CreateDocumentDialog({ onClose, onCreated }: Props) {
       return;
     }
     try {
-      sessionStorage.setItem(CREATE_OPERATION_KEY, JSON.stringify(parsed.data));
+      sessionStorage.setItem(operationKey, JSON.stringify(parsed.data));
     } catch {
       setError(
         'Не удалось сохранить идентификатор операции в браузере. Запрос не отправлен.',
